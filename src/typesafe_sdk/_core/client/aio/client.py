@@ -3,8 +3,10 @@
 from collections.abc import Mapping
 from functools import cached_property
 from types import TracebackType
+from typing import TYPE_CHECKING, TypeVar, overload
 
 import httpx2
+from msgspec import UNSET, UnsetType
 from typing_extensions import Self
 
 from typesafe_sdk._core.client.aio.models import AsyncModels
@@ -15,6 +17,11 @@ from typesafe_sdk._core.question_types import Question
 from typesafe_sdk._core.response_types import SystemOneResponse
 from typesafe_sdk._core.retry import RetryPolicy, build_tenacity_async
 from typesafe_sdk._core.transport import Request, ResponseT, send_async
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+ModelT = TypeVar("ModelT", bound="BaseModel")
 
 
 class AsyncTypeSafeClient:
@@ -103,6 +110,7 @@ class AsyncTypeSafeClient:
         """
         return AsyncModels(self._config, self._http_client, self._retry)
 
+    @overload
     async def system_one(
         self,
         state: JSONContent,
@@ -113,7 +121,48 @@ class AsyncTypeSafeClient:
         timeout: float | httpx2.Timeout | None = None,
         extra_headers: Mapping[str, str] | None = None,
         extra_body: Mapping[str, JSONValue | None] | None = None,
-    ) -> SystemOneResponse:
+    ) -> SystemOneResponse: ...
+
+    @overload
+    async def system_one(
+        self,
+        *,
+        input: JSONContent,
+        questions: Mapping[str, Question],
+        model: str | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        extra_body: Mapping[str, JSONValue | None] | None = None,
+    ) -> SystemOneResponse: ...
+
+    @overload
+    async def system_one(
+        self,
+        state: JSONContent | UnsetType = UNSET,
+        *,
+        input: JSONContent | UnsetType = UNSET,
+        response_model: type[ModelT],
+        model: str | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        extra_body: Mapping[str, JSONValue | None] | None = None,
+    ) -> ModelT: ...
+
+    async def system_one(
+        self,
+        state: JSONContent | UnsetType = UNSET,
+        questions: Mapping[str, Question] | None = None,
+        *,
+        input: JSONContent | UnsetType = UNSET,
+        response_model: type[ModelT] | None = None,
+        model: str | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        extra_body: Mapping[str, JSONValue | None] | None = None,
+    ) -> SystemOneResponse | ModelT:
         """Answer named questions about text or structured state.
 
         See [System One](https://docs.typesafe.ai/concepts/system-one) for details.
@@ -121,7 +170,12 @@ class AsyncTypeSafeClient:
         Args:
             state: Text, a JSON object, or an array to evaluate.
                 See [state](https://docs.typesafe.ai/concepts/state) for details.
+            input: Alias for state. Pass exactly one of input or state.
             questions: Nonempty mapping of names to question objects or raw dictionaries.
+                Mutually exclusive with response_model.
+            response_model: Pydantic v2 model class describing the requested output. Requires
+                typesafe-sdk[pydantic]. Returns a validated instance; unsupported fields fail
+                before the HTTP request. See the README for supported field types.
             model: Model override; `None` inherits the client default.
             retry: An optional retry policy to override the client-level value for this call only.
             timeout: An optional timeout for http operations to override the client-level value for this call only, in seconds.
@@ -132,7 +186,8 @@ class AsyncTypeSafeClient:
                 replaced rather than deep-merged.
 
         Returns:
-            Answers keyed by question name, with model and token usage details.
+            A validated response_model instance when supplied; otherwise answers keyed by
+            question name, with model and token usage details.
 
         Raises:
             TypeSafeError: Questions are empty or a score question's criteria list is empty.
@@ -179,7 +234,23 @@ class AsyncTypeSafeClient:
                     assert result.choices["tone"].choice in {"calm", "angry"}
             ```
         """
-        return await self._request(prepare_system_one(self._config, state, questions, model, extra_body, timeout, extra_headers), retry=retry)
+        request = prepare_system_one(
+            self._config,
+            state,
+            questions,
+            model,
+            extra_body,
+            timeout,
+            extra_headers,
+            input=input,
+            response_model=response_model,
+        )
+        response = await self._request(request, retry=retry)
+        if response_model is not None:
+            from typesafe_sdk._core.pydantic import parse_model
+
+            return parse_model(response_model, response)
+        return response
 
     async def _request(self, request: Request[ResponseT], *, retry: RetryPolicy | None = None) -> ResponseT:
         return await send_async(self._http_client, self._retry, request, retry)
@@ -192,6 +263,8 @@ class AsyncTypeSafeClient:
         """Enter the asynchronous client context."""
         return self
 
-    async def __aexit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None
+    ) -> None:
         """Close the asynchronous client context."""
         await self.aclose()

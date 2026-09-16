@@ -8,7 +8,15 @@ import pytest
 
 from tests.conftest import ClientFactory
 from tests.helpers import system_one
-from typesafe_sdk import AsyncTypeSafeClient, Choice, JSONValue, Noul, Questions, Score, TypeSafeClient
+from typesafe_sdk import (
+    AsyncTypeSafeClient,
+    Choice,
+    JSONValue,
+    Noul,
+    Questions,
+    Score,
+    TypeSafeClient,
+)
 
 
 def test_json_value_and_state_exclude_top_level_none() -> None:
@@ -16,7 +24,8 @@ def test_json_value_and_state_exclude_top_level_none() -> None:
     for client in (AsyncTypeSafeClient, TypeSafeClient):
         state_type = get_type_hints(client.system_one)["state"]
         assert type(None) not in get_args(state_type)
-        text_type, object_type, array_type = get_args(state_type)
+        assert msgspec.UnsetType in get_args(state_type)
+        text_type, object_type, array_type = (part for part in get_args(state_type) if part is not msgspec.UnsetType)
         assert text_type is str
         assert get_origin(object_type) is Mapping
         key_type, value_type = get_args(object_type)

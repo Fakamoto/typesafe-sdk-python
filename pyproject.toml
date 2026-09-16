@@ -39,6 +39,9 @@ dependencies = [
     "typing-extensions>=4.13.0",
 ]
 
+[project.optional-dependencies]
+pydantic = ["pydantic>=2.11,<3"]
+
 [project.urls]
 Homepage = "https://typesafe.ai"
 Documentation = "https://docs.typesafe.ai/sdk/python/"
@@ -53,6 +56,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "gitpython>=3.1.62",
+    "pydantic>=2.11,<3",
     "pyrefly>=1.2.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",

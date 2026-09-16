@@ -1254,12 +1254,18 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
+[package.optional-dependencies]
+pydantic = [
+    { name = "pydantic" },
+]
+
 [package.dev-dependencies]
 codegen = [
     { name = "datamodel-code-generator" },
 ]
 dev = [
     { name = "gitpython" },
+    { name = "pydantic" },
     { name = "pyrefly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1279,14 +1285,17 @@ docs = [
 requires-dist = [
     { name = "httpx2", specifier = ">=2.0.0" },
     { name = "msgspec", specifier = ">=0.21.1" },
+    { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.11,<3" },
     { name = "tenacity", specifier = ">=9.0.0" },
     { name = "typing-extensions", specifier = ">=4.13.0" },
 ]
+provides-extras = ["pydantic"]
 
 [package.metadata.requires-dev]
 codegen = [{ name = "datamodel-code-generator", specifier = ">=0.79.0" }]
 dev = [
     { name = "gitpython", specifier = ">=3.1.62" },
+    { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "pyrefly", specifier = ">=1.2.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },

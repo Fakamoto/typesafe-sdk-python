@@ -5,6 +5,13 @@ icon: lucide/history
 
 # Changelog
 
+## Unreleased
+
+### Features
+
+- accept Pydantic v2 output models through `response_model` in both clients, with the optional `pydantic` extra
+- accept `input` as an alias for `state`, preserving existing calls
+
 ## v0.6.0 (2026-09-15)
 
 ### Breaking Changes

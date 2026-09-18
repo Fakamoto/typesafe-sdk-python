@@ -8,7 +8,7 @@ This fork adds inferred output models on top of the official v0.7.0 SDK.
 Install this fork from main (Pydantic is already included):
 
 ```sh
-uv add 'typesafe-sdk @ git+https://github.com/Fakamoto/typesafe-sdk-python.git@feat/1_pydantic_outputs'
+uv add 'typesafe-sdk @ git+https://github.com/Fakamoto/typesafe-sdk-python.git@main'
 ```
 
 Define the output once, then receive a validated instance of that model:

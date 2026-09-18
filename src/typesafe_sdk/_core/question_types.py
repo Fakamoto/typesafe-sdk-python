@@ -3,9 +3,10 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, model_serializer
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, model_serializer
 from pydantic.functional_serializers import SerializerFunctionWrapHandler
-from typing_extensions import NotRequired, TypedDict
+from pydantic_core import CoreSchema
+from typing_extensions import NotRequired, TypedDict, override
 
 from typesafe_sdk._core.json_types import JSONContent
 from typesafe_sdk._schemas import models as wire
@@ -66,6 +67,12 @@ class _Question(BaseModel):
     """Reject unknown fields and omit optional fields left at their default from the wire form."""
 
     model_config = ConfigDict(extra="forbid")
+
+    @classmethod
+    @override
+    def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        # Question instances can also be Annotated metadata; retain the annotated field's schema.
+        return handler(source)
 
     @model_serializer(mode="wrap")
     def _omit_none(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:

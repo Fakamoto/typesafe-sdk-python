@@ -5,6 +5,12 @@ icon: lucide/history
 
 # Changelog
 
+## Unreleased (fork)
+
+- Infer questions from a flat Pydantic `response_model` when `questions` is omitted; return validated field values.
+- Accept `input` as an alias for `state`, including Pydantic input models serialized as JSON.
+- Preserve v0.7.0 explicit questions and response-envelope validation. Boolean outputs use a probability threshold of 0.5.
+
 ## v0.7.0 (2026-09-18)
 
 ### Breaking Changes

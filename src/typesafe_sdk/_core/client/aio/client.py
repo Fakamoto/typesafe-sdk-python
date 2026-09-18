@@ -6,12 +6,15 @@ from types import TracebackType
 from typing import overload
 
 import httpx2
+from pydantic import BaseModel
 from typing_extensions import Self
 
 from typesafe_sdk._core.client.aio.models import AsyncModels
 from typesafe_sdk._core.config import Config
-from typesafe_sdk._core.endpoints import prepare_system_one
+from typesafe_sdk._core.endpoints import prepare_system_one, resolve_system_one_input
+from typesafe_sdk._core.errors import TypeSafeError
 from typesafe_sdk._core.json_types import JSONContent, JSONValue
+from typesafe_sdk._core.pydantic import parse_model, questions_from_model
 from typesafe_sdk._core.question_types import Question
 from typesafe_sdk._core.response_types import SystemOneResponse
 from typesafe_sdk._core.retry import RetryPolicy, build_tenacity_async
@@ -107,7 +110,7 @@ class AsyncTypeSafeClient:
     @overload
     async def system_one(
         self,
-        state: JSONContent,
+        state: JSONContent | BaseModel,
         questions: Mapping[str, Question],
         *,
         model: str | None = None,
@@ -121,7 +124,7 @@ class AsyncTypeSafeClient:
     @overload
     async def system_one(
         self,
-        state: JSONContent,
+        state: JSONContent | BaseModel,
         questions: Mapping[str, Question],
         *,
         model: str | None = None,
@@ -132,11 +135,54 @@ class AsyncTypeSafeClient:
         response_model: type[ResponseT],
     ) -> ResponseT: ...
 
+    @overload
     async def system_one(
         self,
-        state: JSONContent,
-        questions: Mapping[str, Question],
         *,
+        input: JSONContent | BaseModel,
+        questions: Mapping[str, Question],
+        model: str | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        extra_body: Mapping[str, JSONValue | None] | None = None,
+        response_model: None = None,
+    ) -> SystemOneResponse: ...
+
+    @overload
+    async def system_one(
+        self,
+        *,
+        input: JSONContent | BaseModel,
+        questions: Mapping[str, Question],
+        model: str | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        extra_body: Mapping[str, JSONValue | None] | None = None,
+        response_model: type[ResponseT],
+    ) -> ResponseT: ...
+
+    @overload
+    async def system_one(
+        self,
+        state: JSONContent | BaseModel | None = None,
+        *,
+        input: JSONContent | BaseModel | None = None,
+        response_model: type[ResponseT],
+        model: str | None = None,
+        retry: RetryPolicy | None = None,
+        timeout: float | httpx2.Timeout | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        extra_body: Mapping[str, JSONValue | None] | None = None,
+    ) -> ResponseT: ...
+
+    async def system_one(
+        self,
+        state: JSONContent | BaseModel | None = None,
+        questions: Mapping[str, Question] | None = None,
+        *,
+        input: JSONContent | BaseModel | None = None,
         model: str | None = None,
         retry: RetryPolicy | None = None,
         timeout: float | httpx2.Timeout | None = None,
@@ -151,7 +197,9 @@ class AsyncTypeSafeClient:
         Args:
             state: Text, a JSON object, or an array to evaluate.
                 See [state](https://docs.typesafe.ai/concepts/state) for details.
+            input: Alias for state; text, JSON, or a Pydantic model instance.
             questions: Nonempty mapping of names to question objects or raw dictionaries.
+                When omitted, infer questions from response_model fields and return field values.
             model: Model override; `None` inherits the client default.
             retry: An optional retry policy to override the client-level value for this call only.
             timeout: An optional timeout for http operations to override the client-level value for this call only, in seconds.
@@ -213,6 +261,18 @@ class AsyncTypeSafeClient:
                     assert result.choices["tone"].choice in {"calm", "angry"}
             ```
         """
+        state = resolve_system_one_input(state, input)
+        if questions is None:
+            if response_model is None:
+                raise TypeSafeError("Pass questions or a response_model.")
+            if extra_body is not None and {"state", "questions"}.intersection(extra_body):
+                raise TypeSafeError("extra_body cannot override state or questions in inferred mode.")
+            inferred_questions = questions_from_model(response_model)
+            response = await self._request(
+                prepare_system_one(self._config, state, inferred_questions, model, extra_body, timeout, extra_headers, SystemOneResponse),
+                retry=retry,
+            )
+            return parse_model(response_model, response)
         return await self._request(
             prepare_system_one(
                 self._config,

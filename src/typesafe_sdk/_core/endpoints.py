@@ -4,14 +4,31 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx2
+from pydantic import BaseModel
 
 from typesafe_sdk._core.config import Config
 from typesafe_sdk._core.constants import MODELS_PATH, SYSTEM_ONE_PATH
+from typesafe_sdk._core.errors import TypeSafeError
 from typesafe_sdk._core.json_types import JSONContent, JSONValue
 from typesafe_sdk._core.question_types import Question
 from typesafe_sdk._core.questions import normalize_questions
 from typesafe_sdk._core.response_types import ListModelsResponse
 from typesafe_sdk._core.transport import Request, ResponseT, prepare
+
+
+def resolve_system_one_input(state: JSONContent | BaseModel | None, input: JSONContent | BaseModel | None) -> JSONContent:
+    """Resolve the input alias and serialize model instances as JSON values."""
+    if state is not None and input is not None:
+        raise TypeSafeError("Pass either input or state, not both.")
+    value = input if input is not None else state
+    if value is None:
+        raise TypeSafeError("An input or state is required.")
+    if isinstance(value, BaseModel):
+        serialized = value.model_dump(mode="json")
+        if not isinstance(serialized, (str, dict, list)):
+            raise TypeSafeError("Input models must serialize to text, an object, or an array.")
+        return serialized
+    return value
 
 
 def prepare_system_one(

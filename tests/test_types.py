@@ -3,12 +3,21 @@ from typing import get_type_hints
 
 import httpx2
 import pytest
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import from_json
 
 from tests.conftest import ClientFactory
 from tests.helpers import system_one
-from typesafe_sdk import AsyncTypeSafeClient, Choice, JSONContent, JSONValue, Noul, Questions, Score, TypeSafeClient
+from typesafe_sdk import (
+    AsyncTypeSafeClient,
+    Choice,
+    JSONContent,
+    JSONValue,
+    Noul,
+    Questions,
+    Score,
+    TypeSafeClient,
+)
 from typesafe_sdk._core.json import _fallback
 
 
@@ -22,9 +31,9 @@ def test_str_subclasses_fallback_to_strings() -> None:
 
 
 def test_json_value_and_state_exclude_top_level_none() -> None:
-    # `state` is annotated with the `JSONContent` alias.
+    # Input also accepts models; None is the omitted-argument default.
     for client in (AsyncTypeSafeClient, TypeSafeClient):
-        assert get_type_hints(client.system_one)["state"] is JSONContent
+        assert get_type_hints(client.system_one)["state"] == JSONContent | BaseModel | None
     # Both JSON aliases forbid a bare top-level `None`, while accepting the text, mapping, and
     # sequence forms — and `None` remains valid *nested* as a value.
     for alias in (JSONContent, JSONValue):

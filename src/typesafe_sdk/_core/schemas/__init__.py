@@ -1,1 +1,1 @@
-"""msgspec structs for API responses."""
+"""Base models for API responses."""

@@ -33,10 +33,11 @@ learn what TypeSafe is, what it can do, and how to use it in [TypeSafe docs](htt
 
 ## Pydantic outputs
 
-Install the optional Pydantic v2 integration:
+This fork adds inferred output models on top of the official v0.7.0 SDK.
+Install this feature branch (Pydantic is already included):
 
 ```sh
-uv add 'typesafe-sdk[pydantic]'
+uv add 'typesafe-sdk @ git+https://github.com/Fakamoto/typesafe-sdk-python.git@feat/1_pydantic_outputs'
 ```
 
 Define the output once, then receive a validated instance of that model:
@@ -48,24 +49,45 @@ from pydantic import BaseModel, Field
 from typesafe_sdk import TypeSafeClient
 
 
-class TicketClassification(BaseModel):
+class Ticket(BaseModel):
     category: Literal["billing", "technical", "other"] = Field(
         description="What is this ticket about?"
     )
+    urgent: bool = Field(description="Does this need immediate attention?")
 
 
 with TypeSafeClient() as client:
     result = client.system_one(
         input="I was charged twice.",
-        response_model=TicketClassification,
+        response_model=Ticket,
     )
 
-print(result.category)
+print(result.category, result.urgent)
 ```
 
 `AsyncTypeSafeClient` accepts the same arguments with `await`. The result's static type is
 the supplied model, so editors can complete `result.category`. `input` accepts text,
-JSON objects, or arrays and is an alias for `state`; pass exactly one of them.
+JSON objects, arrays, or a Pydantic model instance and is an alias for `state`; pass
+exactly one of them. Input models use `model_dump(mode="json")`, including nested data
+and JSON conversion of dates and enums. Models that serialize to scalar numbers,
+booleans, or null are rejected.
+
+```python
+class TicketInput(BaseModel):
+    message: str
+    context: dict[str, list[str]]
+
+
+with TypeSafeClient() as client:
+    from_model = client.system_one(
+        input=TicketInput(message="Charged twice", context={"tags": ["billing"]}),
+        response_model=Ticket,
+    )
+    from_dict = client.system_one(
+        input={"message": "Charged twice", "context": {"tags": ["billing"]}},
+        response_model=Ticket,
+    )
+```
 
 Supported fields map to Jev's existing primitives:
 
@@ -102,17 +124,20 @@ Unsupported shapes (including free-form strings, bare numbers, unions, nested mo
 lists, and root models) fail before a network request. This integration does not add
 text generation or general JSON Schema support to Jev.
 
-`response_model` and `questions` are mutually exclusive. With `response_model`,
-`extra_body` cannot replace `state` or `questions`. The result contains only your model's
-data; use the existing `questions` API when you need confidence, probability distributions,
-token usage, or the raw HTTP response. Existing calls and msgspec response types are unchanged.
+When `questions` is omitted, fields define questions and the result contains your model's
+values. In this mode, `extra_body` cannot replace `state` or `questions`.
+
+When `questions` is supplied, the official v0.7.0 behavior stays unchanged:
+`response_model` validates the full response envelope (including nested answers).
+Omit `response_model` to receive `SystemOneResponse`, with confidence, probability
+distributions, token usage, and the raw HTTP response.
 
 To run the offline tests with this integration installed:
 
 ```sh
-uv sync --extra pydantic
-uv run --extra pydantic pytest -m 'not integration'
-uv run --extra pydantic pyrefly check
+uv sync
+uv run pytest -m 'not integration'
+uv run pyrefly check
 ```
 
 ## Documentation

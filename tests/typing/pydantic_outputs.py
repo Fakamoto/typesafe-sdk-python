@@ -12,11 +12,15 @@ class Ticket(BaseModel):
 
 def sync(client: TypeSafeClient) -> None:
     assert_type(client.system_one(input="x", response_model=Ticket), Ticket)
+    assert_type(client.system_one(input=Ticket(category="billing"), response_model=Ticket), Ticket)
+    assert_type(client.system_one(input={"text": "x"}, response_model=Ticket), Ticket)
     assert_type(client.system_one("x", response_model=Ticket), Ticket)
     assert_type(client.system_one(input="x", questions={"q": Noul()}), SystemOneResponse)
 
 
 async def asynchronous(client: AsyncTypeSafeClient) -> None:
     assert_type(await client.system_one(input="x", response_model=Ticket), Ticket)
+    assert_type(await client.system_one(input=Ticket(category="billing"), response_model=Ticket), Ticket)
+    assert_type(await client.system_one(input={"text": "x"}, response_model=Ticket), Ticket)
     assert_type(await client.system_one(state="x", response_model=Ticket), Ticket)
     assert_type(await client.system_one(input="x", questions={"q": Noul()}), SystemOneResponse)

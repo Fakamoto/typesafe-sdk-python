@@ -1,38 +1,48 @@
-from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import get_args, get_origin, get_type_hints
+from typing import get_type_hints
 
 import httpx2
-import msgspec
 import pytest
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic_core import from_json
 
 from tests.conftest import ClientFactory
 from tests.helpers import system_one
 from typesafe_sdk import (
     AsyncTypeSafeClient,
     Choice,
+    JSONContent,
     JSONValue,
     Noul,
     Questions,
     Score,
     TypeSafeClient,
 )
+from typesafe_sdk._core.json import _fallback
+
+
+def test_str_subclasses_fallback_to_strings() -> None:
+    class StrSubclass(str):
+        __slots__ = ()
+
+    value = _fallback(StrSubclass("ARPANET"))
+    assert value == "ARPANET"
+    assert type(value) is str
 
 
 def test_json_value_and_state_exclude_top_level_none() -> None:
-    assert type(None) not in get_args(JSONValue)
+    # Input also accepts models; None is the omitted-argument default.
     for client in (AsyncTypeSafeClient, TypeSafeClient):
-        state_type = get_type_hints(client.system_one)["state"]
-        assert type(None) not in get_args(state_type)
-        assert msgspec.UnsetType in get_args(state_type)
-        text_type, object_type, array_type = (part for part in get_args(state_type) if part is not msgspec.UnsetType)
-        assert text_type is str
-        assert get_origin(object_type) is Mapping
-        key_type, value_type = get_args(object_type)
-        assert key_type is str
-        assert type(None) in get_args(value_type)
-        assert get_origin(array_type) is Sequence
-        assert type(None) in get_args(get_args(array_type)[0])
+        assert get_type_hints(client.system_one)["state"] == JSONContent | BaseModel | None
+    # Both JSON aliases forbid a bare top-level `None`, while accepting the text, mapping, and
+    # sequence forms — and `None` remains valid *nested* as a value.
+    for alias in (JSONContent, JSONValue):
+        adapter: TypeAdapter[object] = TypeAdapter(alias)
+        with pytest.raises(ValidationError):
+            adapter.validate_python(None)
+        assert adapter.validate_python("text") == "text"
+        assert adapter.validate_python({"key": None}) == {"key": None}
+        assert adapter.validate_python(["item", None]) == ["item", None]
 
 
 @pytest.mark.parametrize("raw", [False, True])
@@ -55,7 +65,7 @@ async def test_array_inputs(clients: ClientFactory, raw: bool) -> None:
         }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        body = msgspec.json.decode(request.content)
+        body = from_json(request.content)
         assert body["state"] == state
         assert body["questions"] == {
             "yes": {"type": "noul", "instructions": instructions, "criteria": {"true": description, "false": None}},
@@ -75,7 +85,7 @@ async def test_raw_optional_fields_preserve_explicit_null(clients: ClientFactory
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content)["questions"] == questions
+        assert from_json(request.content)["questions"] == questions
         return httpx2.Response(200, json={"model": "jev-latest", "usage": {}, "answers": {}})
 
     await system_one(clients(handler), state="x", questions=questions)
@@ -86,7 +96,7 @@ async def test_explicitly_nullable_json_values(clients: ClientFactory) -> None:
     instructions: dict[str, JSONValue | None] = {"text": "Classify", "extra": None}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        body = msgspec.json.decode(request.content)
+        body = from_json(request.content)
         assert body["state"] == state
         assert body["questions"] == {
             "yes": {"type": "noul", "instructions": instructions, "criteria": {"true": {"extra": None}}},
@@ -118,7 +128,7 @@ async def test_abstract_input_containers_encode(clients: ClientFactory) -> None:
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content) == {
+        assert from_json(request.content) == {
             "state": {"items": ["a", None]},
             "model": "jev-latest",
             "questions": {

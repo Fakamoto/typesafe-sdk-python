@@ -1,37 +1,47 @@
-"""Base msgspec structs shared by the response schemas."""
+"""Response schemas and decoding shared by the SDK response types and custom Pydantic models."""
 
-import re
+from collections.abc import Sequence
 from functools import cached_property
+from typing import Any, TypeVar, cast
 
 import httpx2
-import msgspec
+from pydantic import BaseModel, ConfigDict, ValidationError
 from typing_extensions import Self
 
 from typesafe_sdk._core.constants import REQUEST_ID_HEADER
 from typesafe_sdk._core.errors import TypeSafeAPIResponseValidationError, TypeSafeError, api_error
 from typesafe_sdk._core.json import deserialize
 
-
-# Unknown fields in a response are ignored rather than rejected, so a newer server never breaks
-# an older client.
-class Schema(msgspec.Struct, frozen=True, kw_only=True, forbid_unknown_fields=False):
-    """Base type for response objects. Instances are immutable."""
+ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 
-_ERROR_AT = re.compile(r"`\$(?P<path>[^`]*)`")
-_ERROR_MISSING = re.compile(r"missing required field `(?P<field>[^`]+)`")
+class Schema(BaseModel):
+    """Base type for immutable response objects that tolerate unknown fields."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
 
-def field_path(prefix: tuple[str, ...], error: msgspec.DecodeError) -> str:
-    """Translate a msgspec decode error's location into the SDK's dotted `field_path`."""
-    message = str(error)
-    segments: list[str] = []
-    at = _ERROR_AT.search(message)
-    if at is not None:
-        segments = [segment for segment in at.group("path").split(".") if segment]
-    if (missing := _ERROR_MISSING.search(message)) is not None:
-        segments.append(missing.group("field"))
-    return ".".join((*prefix, *segments))
+def format_path(segments: Sequence[str | int]) -> str:
+    """Render path segments as the SDK's dotted `field_path`."""
+    path = ""
+    for segment in segments:
+        if segment == "[key]":
+            # Pydantic marks an invalid mapping key with a synthetic `[key]` segment; it is noise here.
+            continue
+        if isinstance(segment, int):
+            path += f"[{segment}]"
+        else:
+            path += f".{segment}" if path else str(segment)
+    return path
+
+
+def format_error_path(prefix: Sequence[str | int], error: ValidationError) -> str:
+    """Render the first Pydantic error location as the SDK's dotted `field_path`.
+
+    Integer locations become bracketed indices (`models[1].name`); string locations are dotted.
+    """
+    first = error.errors(include_url=False)[0]["loc"]
+    return format_path((*prefix, *first))
 
 
 def _request_endpoint(response: httpx2.Response) -> str | None:
@@ -50,19 +60,8 @@ def validation_error(response: httpx2.Response, path: str) -> TypeSafeAPIRespons
     )
 
 
-# dict=True gives the struct a __dict__ so subclasses can memoize derived views with cached_property.
-class Response(Schema, frozen=True, kw_only=True, dict=True):
-    """A response object that also exposes the originating HTTP response via ``raw_http_response`` and ``request_id``."""
-
-    def __copy__(self) -> Self:
-        """Copy response fields and runtime metadata."""
-        result = msgspec.structs.replace(self)
-        result.__dict__.update(self.__dict__)
-        return result
-
-    def __reduce__(self) -> tuple[object, ...]:
-        """Preserve runtime metadata during deep copies and pickling."""
-        return (*super().__reduce__(), self.__dict__)
+class _ResponseMixin:
+    """HTTP metadata and custom decoding shared by the SDK response types."""
 
     @classmethod
     def from_http_response(cls, response: httpx2.Response) -> Self:
@@ -71,16 +70,7 @@ class Response(Schema, frozen=True, kw_only=True, dict=True):
         A non-success status raises the matching `TypeSafeAPIError`; a body that does not
         match the schema raises a `TypeSafeAPIResponseValidationError`.
         """
-        if not response.is_success:
-            raise api_error(response.status_code, deserialize(response.content), response.headers, _request_endpoint(response))
-        try:
-            result = cls._decode(response)
-        except msgspec.DecodeError as error:
-            raise validation_error(response, field_path((), error)) from error
-        # Transport metadata is runtime state, not part of the serializable response schema.
-        result.__dict__["_request_id"] = response.headers.get(REQUEST_ID_HEADER)
-        result.__dict__["_raw"] = response
-        return result
+        return cast(Self, parse_response(response, cast(Any, cls)))
 
     @classmethod
     def _decode(cls, response: httpx2.Response) -> Self:
@@ -102,3 +92,27 @@ class Response(Schema, frozen=True, kw_only=True, dict=True):
         if response is None:
             raise TypeSafeError("The response was not created from a raw HTTP response.")
         return response
+
+
+class Response(Schema, _ResponseMixin):
+    """A response object with its originating HTTP response attached."""
+
+
+def parse_response(response: httpx2.Response, response_type: type[ResponseT]) -> ResponseT:
+    """Decode an SDK response or custom Pydantic model with consistent API and validation errors."""
+    if not response.is_success:
+        raise api_error(response.status_code, deserialize(response.content), response.headers, _request_endpoint(response))
+    if issubclass(response_type, _ResponseMixin):
+        result = response_type._decode(response)  # noqa: SLF001 - Dispatch to the SDK response decoder.
+    else:
+        try:
+            result = response_type.model_validate_json(response.content)
+        except ValidationError as error:
+            raise validation_error(response, format_error_path((), error)) from error
+    if isinstance(result, _ResponseMixin):
+        # Transport metadata is runtime state, not part of the serializable response schema, so it is
+        # kept in ``__dict__`` where ``model_dump`` and field iteration never see it.
+        result.__dict__["_request_id"] = response.headers.get(REQUEST_ID_HEADER)
+        result.__dict__["_raw"] = response
+    # The subclass check narrows ResponseT to Response, but decoding preserves the concrete type.
+    return cast(ResponseT, result)

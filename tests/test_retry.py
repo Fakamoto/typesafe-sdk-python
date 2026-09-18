@@ -4,8 +4,8 @@ from email.utils import format_datetime
 from types import SimpleNamespace
 
 import httpx2
-import msgspec
 import pytest
+from pydantic_core import from_json, to_json
 from tenacity import RetryCallState
 
 from tests.conftest import ClientFactory
@@ -361,7 +361,7 @@ async def test_system_one_retry_recovers_with_overrides(
     )
     assert result.scores["quality"].score == 1.7
     assert result.choices["tone"].confidence == 0.9
-    expected = msgspec.json.encode(
+    expected = to_json(
         {
             "state": {"document": "hello"},
             "model": "call-model",
@@ -380,7 +380,7 @@ async def test_system_one_retry_recovers_with_overrides(
     assert headers == {"x-call": "override", "authorization": "must-not-win"}
 
     await system_one(client, state="next", questions=questions)
-    assert msgspec.json.decode(requests[-1].content)["model"] == "client-model"
+    assert from_json(requests[-1].content)["model"] == "client-model"
     assert requests[-1].extensions["timeout"] == httpx2.Timeout(7.0).as_dict()
     assert "x-call" not in requests[-1].headers
     assert "x-typesafe-retry-count" not in requests[-1].headers
@@ -422,8 +422,8 @@ async def test_concurrent_system_one_overrides() -> None:
             None,
             *(str(index) for index in range(1, count)),
         ]
-        assert all(msgspec.json.decode(request.content)["model"] == name for request in requests)
-        assert all(msgspec.json.decode(request.content)["state"] == name for request in requests)
+        assert all(from_json(request.content)["model"] == name for request in requests)
+        assert all(from_json(request.content)["state"] == name for request in requests)
         assert all(request.extensions["timeout"] == httpx2.Timeout(float(count)).as_dict() for request in requests)
 
 

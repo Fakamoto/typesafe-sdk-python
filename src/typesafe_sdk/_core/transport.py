@@ -7,10 +7,10 @@ import time
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic
 
 import httpx2
-import msgspec
+from pydantic_core import PydanticSerializationError
 from tenacity import AsyncRetrying, Retrying
 
 from typesafe_sdk._core.config import Config, resolve_timeout
@@ -30,11 +30,10 @@ from typesafe_sdk._core.errors import TypeSafeAPIConnectionError, TypeSafeAPITim
 from typesafe_sdk._core.json import serialize
 from typesafe_sdk._core.logging import logger
 from typesafe_sdk._core.retry import RetryPolicy, build_tenacity, build_tenacity_async
-from typesafe_sdk._core.schemas.base import Response
+from typesafe_sdk._core.schemas.base import ResponseT, parse_response
 from typesafe_sdk._version import __version__
 
 RUNTIME = f"python/{platform.python_version()} ({sys.platform}; {platform.machine()})"
-ResponseT = TypeVar("ResponseT", bound=Response)
 
 
 @dataclass(frozen=True, repr=False)
@@ -94,7 +93,7 @@ class RequestState(Generic[ResponseT]):
             response.headers.get(REQUEST_ID_HEADER, "-"),
         )
         self._log_wire("<-", response.headers, response.content)
-        return request.response_type.from_http_response(response)
+        return parse_response(response, request.response_type)
 
 
 def prepare(
@@ -135,7 +134,7 @@ def prepare(
 def _encode_body(body: object) -> bytes:
     try:
         return serialize(body)
-    except (msgspec.EncodeError, TypeError) as error:
+    except (PydanticSerializationError, TypeError, ValueError) as error:
         raise TypeSafeError("The request body could not be encoded as JSON") from error
 
 

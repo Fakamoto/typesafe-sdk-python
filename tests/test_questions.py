@@ -1,12 +1,12 @@
 import copy
-import inspect
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, cast
 
 import httpx2
-import msgspec
 import pytest
+from pydantic import BaseModel, ValidationError
+from pydantic_core import from_json, to_json
 
 from tests.conftest import ClientFactory
 from typesafe_sdk import (
@@ -36,7 +36,7 @@ def test_normalization_preserves_objects() -> None:
     assert result["noul"] is questions["noul"]
     assert result["choice"] is questions["choice"]
     assert result["score"] is questions["score"]
-    assert msgspec.json.decode(msgspec.json.encode(result)) == {
+    assert from_json(to_json(result)) == {
         "noul": {"type": "noul", "instructions": "Spam?"},
         "choice": {"type": "choice", "instructions": "Tone?", "criteria": {"calm": None}},
         "score": {"type": "score", "instructions": "Quality?", "criteria": ["bad", "good"]},
@@ -56,7 +56,7 @@ def test_normalization_preserves_raw_questions(raw: dict[str, Any]) -> None:
     questions = cast(Questions, {"raw": raw, "typed": Noul(instructions="Spam?")})
     result = normalize_questions(questions)
     assert isinstance(result["typed"], wire.NoulQuestion)
-    assert msgspec.to_builtins(result) == {"raw": raw, "typed": {"type": "noul", "instructions": "Spam?"}}
+    assert from_json(to_json(result)) == {"raw": raw, "typed": {"type": "noul", "instructions": "Spam?"}}
     assert raw == before
     assert result["raw"] is raw
 
@@ -92,8 +92,8 @@ def test_raw_questions_require_structural_keys(invalid: object) -> None:
     ],
 )
 def test_direct_encoding_omits_only_default_fields(question: Noul | Choice | Score, expected: dict[str, Any]) -> None:
-    assert msgspec.json.decode(msgspec.json.encode(question)) == expected
-    assert msgspec.to_builtins(question) == expected
+    assert from_json(to_json(question)) == expected
+    assert question.model_dump() == expected
 
 
 def test_discriminators_are_automatic() -> None:
@@ -105,23 +105,35 @@ def test_discriminators_are_automatic() -> None:
         (choice, wire.ChoiceQuestion, "choice"),
         (score, wire.ScoreQuestion, "score"),
     ):
-        assert isinstance(question, msgspec.Struct)
+        assert isinstance(question, BaseModel)
         assert isinstance(question, wire_type)
-        assert question.__struct_config__.tag == tag
-        assert question.__struct_config__.tag_field == "type"
-        assert msgspec.to_builtins(question)["type"] == tag
-        assert msgspec.json.decode(msgspec.json.encode(question))["type"] == tag
-        assert not hasattr(question, "type")
-        assert not hasattr(question, "__dict__")
-        signature = inspect.signature(type(question))
-        assert "type" not in signature.parameters
-        assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY for parameter in signature.parameters.values())
+        assert question.type == tag
+        assert question.model_dump()["type"] == tag
+        assert from_json(to_json(question))["type"] == tag
+        # Construction is keyword-only: a positional argument is rejected.
         with pytest.raises(TypeError):
             cast(Any, type(question))("Spam?")
-        with pytest.raises(AttributeError):
-            cast(Any, question).type = "other"
         question.instructions = "Updated?"
-        assert msgspec.to_builtins(question)["instructions"] == "Updated?"
+        assert question.model_dump()["instructions"] == "Updated?"
+
+
+def test_invalid_typed_question_is_rejected_on_construction() -> None:
+    # Unlike raw dictionaries, typed questions validate eagerly rather than deferring to the API.
+    with pytest.raises(ValidationError):
+        Choice(criteria=cast(Any, ["invalid", "shape"]))
+
+
+@pytest.mark.parametrize(
+    "question_type,kwargs",
+    [
+        (Noul, {}),
+        (Choice, {"criteria": {"a": None}}),
+        (Score, {"criteria": ["good"]}),
+    ],
+)
+def test_typed_questions_reject_unknown_fields(question_type: Any, kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        question_type(**kwargs, unexpected=True)
 
 
 @pytest.mark.parametrize("raw", [False, True])
@@ -145,7 +157,13 @@ def test_optional_noul_criteria(raw: bool, criteria: NoulCriteria | None) -> Non
         question = expected.copy()
     else:
         question = Noul(instructions="Spam?", criteria=criteria)
-    assert msgspec.to_builtins(normalize_questions({"q": question})) == {"q": expected}
+    assert from_json(to_json(normalize_questions({"q": question}))) == {"q": expected}
+
+
+def test_typed_noul_criteria_reject_unknown_fields() -> None:
+    criteria = cast(NoulCriteria, {"true": "yes", "metadata": {"source": None}})
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        Noul(criteria=criteria)
 
 
 @pytest.mark.parametrize("raw", [False, True])
@@ -170,7 +188,7 @@ async def test_covariant_question_mappings(clients: ClientFactory) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        assert msgspec.json.decode(request.content)["questions"]
+        assert from_json(request.content)["questions"]
         return httpx2.Response(200, json={"model": "jev-latest", "usage": {}, "answers": {}})
 
     client = clients(handler)

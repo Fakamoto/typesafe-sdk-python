@@ -2,9 +2,6 @@ from enum import Enum
 from typing import Annotated, Literal
 
 import pytest
-
-pytest.importorskip("pydantic", minversion="2.11")
-
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -164,12 +161,3 @@ def test_score_within_rubric(score: float) -> None:
 
     with pytest.raises(TypeSafeError, match="Invalid score"):
         parse_model(Scored, response(value=ScoreAnswer(score=score, confidence=1, probabilities={}, legend={})))
-
-
-@pytest.mark.parametrize("version", ["1.10.0", "2.10.6", "3.0.0"])
-def test_unsupported_pydantic_version(version: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    from typesafe_sdk._core import pydantic as integration
-
-    monkeypatch.setattr(integration, "VERSION", version)
-    with pytest.raises(TypeSafeError, match=r"Pydantic >=2.11,<3"):
-        questions_from_model(Result)

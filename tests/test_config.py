@@ -1,6 +1,6 @@
 import httpx2
-import msgspec
 import pytest
+from pydantic_core import from_json
 
 from tests.conftest import ClientFactory
 from tests.helpers import models, system_one
@@ -28,7 +28,7 @@ async def test_transport_and_http_client_mutually_exclusive(clients: ClientFacto
 @pytest.mark.parametrize("model", [None, "request-model"])
 async def test_model_override(clients: ClientFactory, model: str | None) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content)["model"] == (model or "client-model")
+        assert from_json(request.content)["model"] == (model or "client-model")
         return httpx2.Response(200, json=RESULT)
 
     await system_one(
@@ -52,7 +52,7 @@ async def test_resolution(clients: ClientFactory, monkeypatch: pytest.MonkeyPatc
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.headers["authorization"] == f"Bearer {expected_key}"
         assert str(request.url) == expected_url + "/v1/systemone"
-        assert msgspec.json.decode(request.content)["model"] == expected_model
+        assert from_json(request.content)["model"] == expected_model
         assert request.extensions["timeout"] == {"connect": 10.0, "read": 10.0, "write": 10.0, "pool": 10.0}
         return httpx2.Response(200, json=RESULT)
 
@@ -80,7 +80,7 @@ async def test_empty_env_unset(clients: ClientFactory, monkeypatch: pytest.Monke
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert str(request.url) == "https://api.typesafe.ai/v1/systemone"
-        assert msgspec.json.decode(request.content)["model"] == "jev-latest"
+        assert from_json(request.content)["model"] == "jev-latest"
         return httpx2.Response(200, json=RESULT)
 
     await system_one(clients(handler), state="x", questions={"q": {"type": "noul", "instructions": "?"}})

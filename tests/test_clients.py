@@ -4,8 +4,9 @@ from importlib.metadata import version
 from typing import Any, cast
 
 import httpx2
-import msgspec
 import pytest
+from pydantic import ValidationError
+from pydantic_core import from_json, to_json
 from typing_extensions import assert_type
 
 from tests.conftest import ClientFactory
@@ -86,9 +87,9 @@ async def test_round_trip(clients: ClientFactory, question_form: str) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         assert request.method == "POST"
         assert str(request.url) == "https://api.typesafe.ai/v1/systemone"
-        assert msgspec.json.decode(request.content) == expected
+        assert from_json(request.content) == expected
         assert request.headers["content-type"] == "application/json"
-        return httpx2.Response(200, content=msgspec.json.encode(RESULT))
+        return httpx2.Response(200, content=to_json(RESULT))
 
     result = await system_one(
         clients(handler),
@@ -121,7 +122,7 @@ async def test_round_trip(clients: ClientFactory, question_form: str) -> None:
     assert result.answers["spam"] is result.nouls["spam"]
     assert result.answers["tone"] is result.choices["tone"]
     assert set(result.answers) == {"spam", "tone", "quality"}
-    with pytest.raises(AttributeError):
+    with pytest.raises(ValidationError):
         cast(Any, result).model = "other"
 
 
@@ -135,8 +136,8 @@ async def test_extra_body_shallow_override(clients: ClientFactory) -> None:
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content) == expected
-        return httpx2.Response(200, content=msgspec.json.encode(RESULT))
+        assert from_json(request.content) == expected
+        return httpx2.Response(200, content=to_json(RESULT))
 
     await system_one(
         clients(handler),
@@ -161,31 +162,36 @@ async def test_unserializable_request_body_raises(clients: ClientFactory) -> Non
 
 
 async def test_raw_question_passthrough(clients: ClientFactory) -> None:
-    questions: Questions = {
-        "q": {"type": "noul", "instructions": "Spam?", "weight": 3, "nested": {"k": None}},
-        "choice": {"type": "choice", "criteria": {"a": None}, "weight": 2},
-        "score": {"type": "score", "criteria": ["good"], "weight": 1},
-    }
+    # Explicit escape hatch for fields introduced by the API before this SDK models them.
+    questions = cast(
+        Questions,
+        {
+            "q": {"type": "noul", "instructions": "Spam?", "weight": 3, "nested": {"k": None}},
+            "choice": {"type": "choice", "criteria": {"a": None}, "weight": 2},
+            "score": {"type": "score", "criteria": ["good"], "weight": 1},
+        },
+    )
     expected = {"state": "hi", "model": "jev-latest", "questions": questions}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content) == expected
-        return httpx2.Response(200, content=msgspec.json.encode(RESULT))
+        assert from_json(request.content) == expected
+        return httpx2.Response(200, content=to_json(RESULT))
 
     await system_one(clients(handler), state="hi", questions=questions)
 
 
+# Raw dictionary questions are passed through untouched: the SDK leaves their schema validation to
+# the API. (Typed `Noul`/`Choice`/`Score` objects instead validate eagerly on construction.)
 @pytest.mark.parametrize(
     "question",
     [
         {"type": "noul", "instructions": 1},
         {"type": "choice", "criteria": ["invalid", "shape"]},
-        Choice(criteria=cast(Any, ["invalid", "shape"])),
     ],
 )
 async def test_question_schema_validation_is_left_to_api(clients: ClientFactory, question: Any) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content)["questions"]["q"] == msgspec.to_builtins(question)
+        assert from_json(request.content)["questions"]["q"] == question
         return httpx2.Response(422, json={"detail": "Invalid question"})
 
     with pytest.raises(TypeSafeUnprocessableEntityError, match="Invalid question"):
@@ -205,7 +211,7 @@ async def test_rich_descriptions(clients: ClientFactory) -> None:
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        assert msgspec.json.decode(request.content) == expected
+        assert from_json(request.content) == expected
         return httpx2.Response(
             200,
             json={
@@ -242,14 +248,14 @@ async def test_models_shape(clients: ClientFactory) -> None:
         assert request.method == "GET"
         assert request.url.path == "/v1/models"
         assert request.content == b""
-        return httpx2.Response(200, content=msgspec.json.encode({"models": [CARD]}))
+        return httpx2.Response(200, content=to_json({"models": [CARD]}))
 
     assert await models(clients(handler)) == (ModelMetadata(**CARD),)
 
 
 async def test_models_ignore_unknown_fields(clients: ClientFactory) -> None:
     card = {**CARD, "context_window": 128000, "pricing": None}
-    client = clients(lambda request: httpx2.Response(200, content=msgspec.json.encode({"models": [card]})))
+    client = clients(lambda request: httpx2.Response(200, content=to_json({"models": [card]})))
     response = await client.models.list() if isinstance(client, AsyncTypeSafeClient) else client.models.list()
     [model] = response.models
     assert model.name == "jev-latest"
@@ -327,7 +333,7 @@ async def test_error_mapping(clients: ClientFactory, status: int, error: type[Ty
     ],
 )
 async def test_error_messages(clients: ClientFactory, body: object, message: str) -> None:
-    content = body.encode() if isinstance(body, str) else msgspec.json.encode(body)
+    content = body.encode() if isinstance(body, str) else to_json(body)
     with pytest.raises(TypeSafeAPIError, match="400") as caught:
         await models(clients(lambda request: httpx2.Response(400, content=content)))
     assert str(caught.value) == f"GET https://api.typesafe.ai/v1/models: 400 {message}"

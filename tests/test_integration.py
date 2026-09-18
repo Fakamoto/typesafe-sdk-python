@@ -2,9 +2,15 @@ import pytest
 
 from tests.conftest import Client
 from tests.helpers import models, system_one
-from typesafe_sdk import Choice, Score
+from typesafe_sdk import AsyncTypeSafeClient, Choice, ChoiceAnswer, NoulAnswer, Questions, Score, ScoreAnswer, SystemOneResponse
 
 pytestmark = pytest.mark.integration
+
+
+class PydanticQuestionsResponse(SystemOneResponse):
+    billing: NoulAnswer
+    tone: ChoiceAnswer
+    urgency: ScoreAnswer
 
 
 async def test_live_models(live_client: Client) -> None:
@@ -40,3 +46,24 @@ async def test_live_questions(live_client: Client) -> None:
     assert result.scores["urgency"].legend == {0: "can wait", 1: "this week", 2: "today"}
     assert set(result.scores["urgency"].probabilities) == {0, 1, 2}
     assert sum(result.scores["urgency"].probabilities.values()) == pytest.approx(1, abs=0.1)
+
+
+async def test_live_pydantic_response(live_client: Client) -> None:
+    state = {"subject": "Charged twice this month", "body": "I see two charges of $49. Please fix this ASAP."}
+    questions: Questions = {
+        "billing": {"type": "noul", "instructions": "Is this ticket about billing?"},
+        "tone": Choice(instructions="What is the customer's tone?", criteria={"calm": None, "frustrated": None, "angry": None}),
+        "urgency": Score(instructions="How urgent is this ticket?", criteria=["can wait", "this week", "today"]),
+    }
+    if isinstance(live_client, AsyncTypeSafeClient):
+        result = await live_client.system_one(state, questions, response_model=PydanticQuestionsResponse)
+    else:
+        result = live_client.system_one(state, questions, response_model=PydanticQuestionsResponse)
+
+    assert result.billing == result.nouls["billing"]
+    assert result.tone == result.choices["tone"]
+    assert result.urgency == result.scores["urgency"]
+    assert 0 <= result.billing.noul <= 1
+    assert result.tone.choice in {"calm", "frustrated", "angry"}
+    assert 0 <= result.urgency.score <= 2
+    assert result.request_id

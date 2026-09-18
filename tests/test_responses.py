@@ -3,8 +3,9 @@ import pickle
 from typing import Any, cast
 
 import httpx2
-import msgspec
 import pytest
+from pydantic import ValidationError
+from pydantic_core import from_json
 from typing_extensions import assert_type
 
 from tests.conftest import ClientFactory
@@ -15,6 +16,7 @@ from typesafe_sdk import (
     AsyncTypeSafeClient,
     ChoiceAnswer,
     ListModelsResponse,
+    ModelMetadata,
     NoulAnswer,
     ScoreAnswer,
     SystemOneResponse,
@@ -29,10 +31,11 @@ from typesafe_sdk import (
     [
         ({}, "model"),
         ({"n": {"type": "noul"}}, "answers.n.noul"),
+        ({"n": {"type": "noul", "noul": "0.5"}}, "answers.n.noul"),
         ({"c": {"type": "choice", "choice": "a", "probabilities": {}}}, "answers.c.confidence"),
         ({"c": {"type": "choice", "confidence": 0.5, "probabilities": {}}}, "answers.c.choice"),
         ({"s": {"type": "score", "score": 1.0, "confidence": 1.0, "legend": [], "probabilities": {}}}, "answers.s.legend"),
-        ({"s": {"type": "score", "score": 1.0, "confidence": 1.0, "legend": {"x": "bad"}, "probabilities": {}}}, "answers.s.legend"),
+        ({"s": {"type": "score", "score": 1.0, "confidence": 1.0, "legend": {"x": "bad"}, "probabilities": {}}}, "answers.s.legend.x"),
         ({"c": "not-a-mapping"}, "answers.c.type"),
     ],
 )
@@ -98,10 +101,10 @@ async def test_response_serialization_excludes_http_metadata(clients: ClientFact
         assert result.choices
         assert result.scores
     assert result.request_id == "req-export"
-    assert set(msgspec.to_builtins(result)) == set(body)
-    encoded = msgspec.json.encode(result)
-    assert msgspec.json.decode(encoded) == body
-    restored = msgspec.json.decode(encoded, type=type(result))
+    assert set(result.model_dump()) == set(body)
+    encoded = result.model_dump_json()
+    assert from_json(encoded) == body
+    restored = type(result).model_validate_json(encoded)
     assert restored == result
     assert result.raw_http_response.json() == body
 
@@ -147,7 +150,8 @@ async def test_unknown_extra_fields_tolerated(clients: ClientFactory) -> None:
     )
     assert result.nouls["spam"].noul == 0.9
     assert not hasattr(result.usage, "billing_units")
-    assert msgspec.to_builtins(result.usage) == {"input_tokens": 1, "output_tokens": 1}
+    assert result.usage.model_dump() == {"input_tokens": 1, "output_tokens": 1}
+    assert result.raw_http_response.json() == body
 
 
 async def test_unknown_answer_type_ignored(clients: ClientFactory) -> None:
@@ -196,7 +200,7 @@ def test_response_preserves_nested_json() -> None:
     assert isinstance(examples, list)
     assert isinstance(examples[1], dict)
 
-    exported = msgspec.to_builtins(answer)
+    exported = answer.model_dump()
     assert exported == {
         "type": "score",
         "score": 0.0,
@@ -204,7 +208,7 @@ def test_response_preserves_nested_json() -> None:
         "legend": {0: {"examples": ["a", {"note": None}]}},
         "probabilities": {0: 1.0},
     }
-    # to_builtins returns an independent deep copy: mutating it leaves the struct untouched.
+    # model_dump returns an independent deep copy: mutating it leaves the model untouched.
     exported["legend"][0]["examples"].append("new")
     exported["probabilities"][0] = 0.5
     assert examples == ["a", {"note": None}]
@@ -218,13 +222,31 @@ def test_answer_attributes_and_dictionary_types() -> None:
     assert_type(choice.choice, str)
     assert_type(choice.confidence, float)
     assert_type(choice.probabilities, dict[str, float])
-    assert msgspec.to_builtins(noul) == {"type": "noul", "noul": 0.98}
-    assert msgspec.to_builtins(choice) == {
+    assert noul.model_dump() == {"type": "noul", "noul": 0.98}
+    assert choice.model_dump() == {
         "type": "choice",
         "choice": "billing",
         "confidence": 0.9,
         "probabilities": {"billing": 0.9, "support": 0.1},
     }
+
+
+@pytest.mark.parametrize(
+    "model_type,kwargs",
+    [
+        (NoulAnswer, {"noul": 0.5}),
+        (ChoiceAnswer, {"choice": "a", "confidence": 1.0, "probabilities": {"a": 1.0}}),
+        (ScoreAnswer, {"score": 0.0, "confidence": 1.0, "legend": {0: "bad"}, "probabilities": {0: 1.0}}),
+        (Usage, {}),
+        (SystemOneResponse, {"model": "test", "usage": Usage()}),
+        (ModelMetadata, {"name": "test", "description": "Test model", "release_date": "2026-09-14"}),
+        (ListModelsResponse, {"models": ()}),
+    ],
+)
+def test_public_response_types_ignore_unknown_fields(model_type: Any, kwargs: dict[str, Any]) -> None:
+    result = model_type(**kwargs, unexpected=True)
+    assert not hasattr(result, "unexpected")
+    assert "unexpected" not in result.model_dump()
 
 
 @pytest.mark.parametrize(
@@ -235,21 +257,18 @@ def test_answer_attributes_and_dictionary_types() -> None:
         ScoreAnswer(score=0.0, confidence=1.0, legend={0: "bad"}, probabilities={0: 1.0}),
     ],
 )
-def test_answer_fields_are_frozen_and_slotted(answer: Answer) -> None:
-    assert not hasattr(answer, "__dict__")
-    with pytest.raises(AttributeError):
+def test_answer_fields_are_frozen(answer: Answer) -> None:
+    with pytest.raises(ValidationError):
         cast(Any, answer).type = "other"
-    for name in answer.__struct_fields__:
-        with pytest.raises(AttributeError):
+    for name in type(answer).model_fields:
+        with pytest.raises(ValidationError):
             setattr(answer, name, getattr(answer, name))
 
 
 @pytest.mark.parametrize("group", ["nouls", "choices", "scores"])
-def test_cached_groups_cannot_be_reassigned(group: str) -> None:
+def test_answer_groups_are_cached_and_not_serialized(group: str) -> None:
     result = SystemOneResponse(model="test", usage=Usage(), answers={})
-    with pytest.raises(AttributeError):
-        setattr(result, group, {})
     cached = getattr(result, group)
+    # The derived view is memoized (stable identity) and never leaks into the serialized payload.
     assert getattr(result, group) is cached
-    with pytest.raises(AttributeError):
-        setattr(result, group, {})
+    assert group not in result.model_dump()

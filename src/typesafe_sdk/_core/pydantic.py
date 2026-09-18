@@ -1,11 +1,9 @@
-"""Optional conversion between flat Pydantic models and System One questions."""
+"""Conversion between flat Pydantic models and System One questions."""
 
 from enum import Enum
 from typing import Literal, TypeVar, get_args, get_origin
 
-import msgspec
 from pydantic import BaseModel
-from pydantic.version import VERSION
 
 from typesafe_sdk._core.errors import TypeSafeError
 from typesafe_sdk._core.question_types import Choice, Noul, Question, Score
@@ -22,8 +20,6 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 def questions_from_model(model: type[ModelT]) -> dict[str, Question]:
     """Convert supported model fields to questions, using Python field names."""
-    if not (2, 11) <= tuple(int(part) for part in VERSION.split(".")[:2]) < (3, 0):
-        raise TypeSafeError('Pydantic >=2.11,<3 is required. Install with: pip install "typesafe-sdk[pydantic]"')
     if not isinstance(model, type) or not issubclass(model, BaseModel):
         raise TypeSafeError("response_model must be a Pydantic BaseModel subclass.")
     if model.__pydantic_root_model__ or not model.model_fields:
@@ -57,7 +53,7 @@ def questions_from_model(model: type[ModelT]) -> dict[str, Question]:
                 f'Field "{name}" has an unsupported type; use string Literal/Enum, bool, or float with Noul/Score metadata.'
             )
         if question.instructions is None and field.description is not None:
-            question = msgspec.structs.replace(question, instructions=field.description)
+            question = question.model_copy(update={"instructions": field.description})
         questions[name] = question
     return normalize_questions(questions)
 

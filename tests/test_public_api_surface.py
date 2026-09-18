@@ -10,7 +10,8 @@ from typesafe_sdk import AsyncTypeSafeClient, TypeSafeClient
 
 @pytest.mark.parametrize("module", [typesafe_sdk, typesafe_sdk.constants], ids=lambda module: module.__name__)
 def test_public_members(module: ModuleType, snapshot: SnapshotAssertion) -> None:
-    assert sorted(name for name in vars(module) if not name.startswith("_")) == snapshot
+    members = module.__all__ if module is typesafe_sdk else (name for name in vars(module) if not name.startswith("_"))
+    assert sorted(members) == snapshot
 
 
 def test_package_exports() -> None:

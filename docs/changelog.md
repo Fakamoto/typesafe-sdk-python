@@ -5,12 +5,25 @@ icon: lucide/history
 
 # Changelog
 
-## Unreleased
+## Unreleased (fork)
+
+- Infer questions from a flat Pydantic `response_model` when `questions` is omitted; return validated field values.
+- Accept `input` as an alias for `state`, including Pydantic input models serialized as JSON.
+- Preserve v0.7.0 explicit questions and response-envelope validation. Boolean outputs use a probability threshold of 0.5.
+
+## v0.7.0 (2026-09-18)
+
+### Breaking Changes
+
+- ser/de library has been changed from `msgspec` to `pydantic`
+
+### Bug fixes
+
+- `str` subclasses are now correctly serialized as strings instead of lists of characters
 
 ### Features
 
-- accept Pydantic v2 output models through `response_model` in both clients, with the optional `pydantic` extra
-- accept `input` as an alias for `state`, preserving existing calls
+- the `system_one` method now accepts a new `response_model` argument that can be set to a desired `pydantic` model for additional _type-safety_
 
 ## v0.6.0 (2026-09-15)
 

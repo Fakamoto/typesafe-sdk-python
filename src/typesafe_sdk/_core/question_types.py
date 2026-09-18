@@ -1,15 +1,18 @@
 """Question objects and raw input models."""
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypeAlias
+from typing import Any, Literal, TypeAlias
 
-from typing_extensions import NotRequired, TypedDict
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, model_serializer
+from pydantic.functional_serializers import SerializerFunctionWrapHandler
+from pydantic_core import CoreSchema
+from typing_extensions import NotRequired, TypedDict, override
 
-from typesafe_sdk._core.json_types import JSONContent, JSONValue
+from typesafe_sdk._core.json_types import JSONContent
 from typesafe_sdk._schemas import models as wire
 
 
-class NoulCriteria(TypedDict, total=False, extra_items=JSONValue | None):
+class NoulCriteria(TypedDict, total=False, closed=True):
     """Optional descriptions of the yes and no outcomes.
 
     See the [noul primitive](https://docs.typesafe.ai/primitives/noul) for details.
@@ -21,8 +24,8 @@ class NoulCriteria(TypedDict, total=False, extra_items=JSONValue | None):
     """Description of the no outcome as text, a JSON object, or an array; `None` leaves it undescribed."""
 
 
-class NoulModel(TypedDict, extra_items=JSONValue | None):
-    """A yes/no question dictionary with `type="noul"`, allowing extra JSON fields.
+class NoulModel(TypedDict, closed=True):
+    """A yes/no question dictionary with `type="noul"`.
 
     See the [noul primitive](https://docs.typesafe.ai/primitives/noul) for details.
     """
@@ -34,8 +37,8 @@ class NoulModel(TypedDict, extra_items=JSONValue | None):
     """Optional descriptions of the yes and no outcomes."""
 
 
-class ChoiceModel(TypedDict, extra_items=JSONValue | None):
-    """A choice question dictionary with `type="choice"`, allowing extra JSON fields.
+class ChoiceModel(TypedDict, closed=True):
+    """A choice question dictionary with `type="choice"`.
 
     See the [choice primitive](https://docs.typesafe.ai/primitives/choice) for details.
     """
@@ -47,8 +50,8 @@ class ChoiceModel(TypedDict, extra_items=JSONValue | None):
     """Labels mapped to text, object, or array descriptions, or `None` for undescribed labels."""
 
 
-class ScoreModel(TypedDict, extra_items=JSONValue | None):
-    """A score question dictionary with `type="score"`, allowing extra JSON fields.
+class ScoreModel(TypedDict, closed=True):
+    """A score question dictionary with `type="score"`.
 
     See the [score primitive](https://docs.typesafe.ai/primitives/score) for details.
     """
@@ -60,36 +63,57 @@ class ScoreModel(TypedDict, extra_items=JSONValue | None):
     """A nonempty, ordered list of text, object, or array descriptions, one per score from zero."""
 
 
-class Noul(wire.NoulQuestion, kw_only=True, omit_defaults=True):
+class _Question(BaseModel):
+    """Reject unknown fields and omit optional fields left at their default from the wire form."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @classmethod
+    @override
+    def __get_pydantic_core_schema__(cls, source: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        # Question instances can also be Annotated metadata; retain the annotated field's schema.
+        return handler(source)
+
+    @model_serializer(mode="wrap")
+    def _omit_none(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # An unset optional field (`None`) is left off the wire, while user-supplied `None` values
+        # nested inside `criteria`/`instructions` are preserved.
+        return {key: value for key, value in handler(self).items() if value is not None}
+
+
+class Noul(_Question, wire.NoulQuestion):
     """A yes/no question with optional descriptions for either outcome.
 
     See the [noul primitive](https://docs.typesafe.ai/primitives/noul) for details.
     """
 
+    type: Literal["noul"] = "noul"
     instructions: JSONContent | None = None  # pyrefly: ignore[bad-override-mutable-attribute]
     """The question to ask, expressed as text, a JSON object, or an array; optional."""
     criteria: NoulCriteria | None = None  # pyrefly: ignore[bad-override-mutable-attribute]
     """Optional descriptions of the yes and no outcomes."""
 
 
-class Choice(wire.ChoiceQuestion, kw_only=True, omit_defaults=True):
+class Choice(_Question, wire.ChoiceQuestion):
     """A question that selects between named alternatives.
 
     See the [choice primitive](https://docs.typesafe.ai/primitives/choice) for details.
     """
 
+    type: Literal["choice"] = "choice"
     criteria: Mapping[str, JSONContent | None]  # pyrefly: ignore[bad-override-mutable-attribute]
     """Labels mapped to text, object, or array descriptions, or `None` for undescribed labels."""
     instructions: JSONContent | None = None  # pyrefly: ignore[bad-override-mutable-attribute]
     """The question to ask, expressed as text, a JSON object, or an array; optional."""
 
 
-class Score(wire.ScoreQuestion, kw_only=True, omit_defaults=True):
+class Score(_Question, wire.ScoreQuestion):
     """A question that assigns a score using an ordered rubric.
 
     See the [score primitive](https://docs.typesafe.ai/primitives/score) for details.
     """
 
+    type: Literal["score"] = "score"
     criteria: Sequence[JSONContent]  # pyrefly: ignore[bad-override-mutable-attribute]
     """A nonempty, ordered list of text, object, or array descriptions, one per score from zero."""
     instructions: JSONContent | None = None  # pyrefly: ignore[bad-override-mutable-attribute]

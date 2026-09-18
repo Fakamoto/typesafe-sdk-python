@@ -5,7 +5,7 @@ Python SDK for [TypeSafe AI](https://typesafe.ai).
 ## Quickstart
 
 This fork adds inferred output models on top of the official v0.7.0 SDK.
-Install this feature branch (Pydantic is already included):
+Install this fork from main (Pydantic is already included):
 
 ```sh
 uv add 'typesafe-sdk @ git+https://github.com/Fakamoto/typesafe-sdk-python.git@feat/1_pydantic_outputs'
